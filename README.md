@@ -8,11 +8,17 @@ a copy of the same workflow in every repo.
 
 | Check | Posture | |
 |---|---|---|
-| **CodeQL** | advisory | Advanced setup, configurable languages, `security-extended`. C# uses `build-mode: manual` and replays the real build. Findings → Security tab; do **not** fail the run. |
-| **Vulnerable NuGet packages** | **blocking** | `dotnet list package --vulnerable` → a High/Critical fails unless its GHSA/CVE id is in the caller's `.github/allowed-advisories.txt`. Moderate/Low → job summary only. |
-| **Dependency review** | **blocking** on PRs | No new High+ vulnerable dependency may be introduced. |
-| **Zizmor** | advisory | GitHub Actions SAST over the caller's own workflow files. |
-| **security-all** | — | The single status check to require in branch protection. Enforces the two supply-chain gates; CodeQL and Zizmor are advisory. |
+| **Vulnerable NuGet packages** | **blocking** (via `security-all`) | `dotnet list package --vulnerable` → a High/Critical fails unless its GHSA/CVE id is in the caller's `.github/allowed-advisories.txt`. Moderate/Low → job summary only. |
+| **Dependency review** | **blocking** on PRs (via `security-all`) | No new High+ vulnerable dependency may be introduced. |
+| **CodeQL** | via required check-run | Advanced setup, configurable languages, `security-extended`. C# uses `build-mode: manual` and replays the real build. SARIF → Security tab. The action never fails its own job — make the **`CodeQL`** check-run required (see below). |
+| **Zizmor** | via required check-run | GitHub Actions SAST over the caller's own workflow files. SARIF → Security tab. Make the **`zizmor`** check-run required (see below). |
+
+### Required checks
+
+- **`security / security-all`** — the supply-chain gate (NuGet + dependency-review).
+- **`CodeQL`** and **`zizmor`** — the code-scanning check-runs. They go red when a PR
+  introduces a finding. Add them as required too, once the repo's existing findings are
+  triaged to zero, so new findings can't merge.
 
 ## Use it
 

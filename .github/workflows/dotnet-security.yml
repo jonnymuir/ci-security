@@ -3,12 +3,13 @@ name: .NET security (reusable)
 # Reusable SAST + supply-chain workflow for the Wayfinder estate and its consumers.
 # Call it from a repo with a ~12-line stub — see this repo's README.
 #
-#   CodeQL ................. advisory — findings go to the Security tab, they do NOT
-#                            fail the run (see the security-all gate).
-#   Vulnerable NuGet ....... BLOCKING — High/Critical fails unless the advisory id is
-#                            in the caller's allowed-advisories file.
-#   Dependency review ...... BLOCKING on PRs — no new High+ vulnerable dependency.
-#   Zizmor ................ advisory — GitHub Actions SAST over the caller's workflows.
+#   Vulnerable NuGet ....... BLOCKING via the security-all gate — High/Critical fails
+#                            unless the advisory id is in the caller's allowed-advisories.
+#   Dependency review ...... BLOCKING via security-all on PRs — no new High+ dependency.
+#   CodeQL / Zizmor ........ upload SARIF to the caller's Security tab. The actions never
+#                            fail their own job, so gate them by making the code-scanning
+#                            check-runs ("CodeQL", "zizmor") REQUIRED in the caller's
+#                            branch protection / ruleset — see this repo's README.
 #
 # The caller must have CodeQL "default setup" DISABLED (advanced setup here conflicts
 # with it):  gh api -X PATCH repos/OWNER/REPO/code-scanning/default-setup -f state=not-configured
@@ -81,7 +82,7 @@ jobs:
       matrix:
         language: ${{ fromJSON(inputs.codeql-languages) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
@@ -96,7 +97,7 @@ jobs:
           fi
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ steps.mode.outputs.build-mode }}
@@ -108,7 +109,7 @@ jobs:
       # compilation. Autobuild can't know a front-end bundle must exist first.
       - name: Setup Node
         if: steps.mode.outputs.build-mode == 'manual' && inputs.node-build != '[]'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -124,7 +125,7 @@ jobs:
 
       - name: Setup .NET
         if: steps.mode.outputs.build-mode == 'manual'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
@@ -133,7 +134,7 @@ jobs:
         run: dotnet build "${{ inputs.solution }}" -c Release
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -143,12 +144,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
@@ -157,7 +158,7 @@ jobs:
 
       # Internal ref pinned to this repo's major tag; bump both together when cutting v2.
       - name: Gate
-        uses: jonnymuir/ci-security/.github/actions/nuget-vuln-gate@v1
+        uses: jonnymuir/ci-security/.github/actions/nuget-vuln-gate@94561c2274456c1461a78592afeba9a0e2174989 # v1
         with:
           target: ${{ inputs.solution }}
           allowed-advisories-path: ${{ inputs.allowed-advisories-path }}
@@ -170,10 +171,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
         with:
           fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
           comment-summary-in-pr: on-failure
@@ -186,11 +187,11 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       # advanced-security defaults true: SARIF to the Security tab, does NOT fail the job.
-      - uses: zizmorcore/zizmor-action@v0.6.3
+      - uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
 
   security-all:
     name: security-all
