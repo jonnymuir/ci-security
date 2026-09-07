@@ -1,0 +1,219 @@
+name: .NET security (reusable)
+
+# Reusable SAST + supply-chain workflow for the Wayfinder estate and its consumers.
+# Call it from a repo with a ~12-line stub — see this repo's README.
+#
+#   CodeQL ................. advisory — findings go to the Security tab, they do NOT
+#                            fail the run (see the security-all gate).
+#   Vulnerable NuGet ....... BLOCKING — High/Critical fails unless the advisory id is
+#                            in the caller's allowed-advisories file.
+#   Dependency review ...... BLOCKING on PRs — no new High+ vulnerable dependency.
+#   Zizmor ................ advisory — GitHub Actions SAST over the caller's workflows.
+#
+# The caller must have CodeQL "default setup" DISABLED (advanced setup here conflicts
+# with it):  gh api -X PATCH repos/OWNER/REPO/code-scanning/default-setup -f state=not-configured
+
+on:
+  workflow_call:
+    inputs:
+      solution:
+        description: Solution/project for restore, the NuGet gate, and the C# CodeQL build.
+        required: true
+        type: string
+      dotnet-version:
+        description: .NET SDK version.
+        required: false
+        default: '10.0.x'
+        type: string
+      node-version:
+        description: Node version for the pre-build below.
+        required: false
+        default: '20'
+        type: string
+      node-build:
+        description: >
+          JSON array of directories to `npm ci && npm run build` before the C# CodeQL
+          build (front-end bundles packed as static web assets). Empty = skip.
+        required: false
+        default: '[]'
+        type: string
+      codeql-languages:
+        description: JSON array of CodeQL languages.
+        required: false
+        default: '["csharp", "javascript-typescript"]'
+        type: string
+      codeql-queries:
+        description: CodeQL query suite.
+        required: false
+        default: security-extended
+        type: string
+      codeql-paths-ignore:
+        description: JSON array of globs CodeQL should not attribute to the caller.
+        required: false
+        default: >-
+          ["**/bin", "**/obj", "**/node_modules", "**/wwwroot/dist", "**/wwwroot/lib",
+           "**/*.min.js", "assets"]
+        type: string
+      allowed-advisories-path:
+        description: Path (in the caller repo) to the accepted-advisories file.
+        required: false
+        default: .github/allowed-advisories.txt
+        type: string
+      dependency-review-fail-on-severity:
+        description: dependency-review-action fail-on-severity.
+        required: false
+        default: high
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.codeql-languages) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Derive build-mode
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ matrix.language }}" = "csharp" ] || [ "${{ matrix.language }}" = "java-kotlin" ] || [ "${{ matrix.language }}" = "swift" ]; then
+            echo "build-mode=manual" >> "$GITHUB_OUTPUT"
+          else
+            echo "build-mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ steps.mode.outputs.build-mode }}
+          queries: ${{ inputs.codeql-queries }}
+          config: |
+            paths-ignore: ${{ inputs.codeql-paths-ignore }}
+
+      # C# is build-mode: manual — reproduce the real build so CodeQL analyses the same
+      # compilation. Autobuild can't know a front-end bundle must exist first.
+      - name: Setup Node
+        if: steps.mode.outputs.build-mode == 'manual' && inputs.node-build != '[]'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Pre-build front-end bundles
+        if: steps.mode.outputs.build-mode == 'manual' && inputs.node-build != '[]'
+        shell: bash
+        run: |
+          echo '${{ inputs.node-build }}' | jq -r '.[]' | while read -r dir; do
+            echo "::group::npm ci && npm run build ($dir)"
+            (cd "$dir" && npm ci && npm run build)
+            echo "::endgroup::"
+          done
+
+      - name: Setup .NET
+        if: steps.mode.outputs.build-mode == 'manual'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Build
+        if: steps.mode.outputs.build-mode == 'manual'
+        run: dotnet build "${{ inputs.solution }}" -c Release
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  vulnerable-nuget:
+    name: Vulnerable NuGet packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Restore
+        run: dotnet restore "${{ inputs.solution }}"
+
+      # Internal ref pinned to this repo's major tag; bump both together when cutting v2.
+      - name: Gate
+        uses: jonnymuir/ci-security/.github/actions/nuget-vuln-gate@v1
+        with:
+          target: ${{ inputs.solution }}
+          allowed-advisories-path: ${{ inputs.allowed-advisories-path }}
+
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.dependency-review-fail-on-severity }}
+          comment-summary-in-pr: on-failure
+
+  zizmor:
+    name: Zizmor (Actions SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # advanced-security defaults true: SARIF to the Security tab, does NOT fail the job.
+      - uses: zizmorcore/zizmor-action@v0.6.3
+
+  security-all:
+    name: security-all
+    runs-on: ubuntu-latest
+    needs: [codeql, vulnerable-nuget, dependency-review, zizmor]
+    if: always()
+    steps:
+      - name: Decide
+        env:
+          CODEQL: ${{ needs.codeql.result }}
+          VULN: ${{ needs.vulnerable-nuget.result }}
+          DEPREVIEW: ${{ needs.dependency-review.result }}
+          ZIZMOR: ${{ needs.zizmor.result }}
+        run: |
+          echo "codeql:            $CODEQL   (advisory — not enforced)"
+          echo "vulnerable-nuget:  $VULN     (blocking)"
+          echo "dependency-review: $DEPREVIEW (blocking on PRs; skipped otherwise)"
+          echo "zizmor:            $ZIZMOR   (advisory — not enforced)"
+          if [[ "$VULN" != "success" ]]; then
+            echo "::error::vulnerable-nuget did not pass"; exit 1
+          fi
+          case "$DEPREVIEW" in
+            success|skipped) ;;
+            *) echo "::error::dependency-review did not pass"; exit 1 ;;
+          esac
+          echo "Security gate passed."

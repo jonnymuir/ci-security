@@ -1,0 +1,24 @@
+name: NuGet vulnerability gate
+description: >
+  Fails when `dotnet list package --vulnerable` reports a High/Critical advisory that is
+  not recorded in the repo's allow-list. Moderate/Low and allow-listed entries are
+  reported in the job summary only. Run after restore.
+
+inputs:
+  target:
+    description: Solution or project to scan (e.g. Foo.slnx).
+    required: true
+  allowed-advisories-path:
+    description: Path (in the caller repo) to the accepted-advisories file.
+    required: false
+    default: .github/allowed-advisories.txt
+
+runs:
+  using: composite
+  steps:
+    - name: Scan for vulnerable NuGet packages
+      shell: bash
+      run: |
+        bash "${{ github.action_path }}/check-vulnerable-packages.sh" \
+          "${{ inputs.target }}" \
+          "${{ inputs.allowed-advisories-path }}"
