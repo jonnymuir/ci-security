@@ -1,0 +1,187 @@
+name: DAST baseline (reusable)
+
+# Reusable OWASP ZAP *baseline* scan for the Wayfinder estate. Boots the caller's app,
+# spiders it, runs ZAP's passive rules only — no active attacks, non-destructive. Finds
+# runtime issues SAST can't see: missing/mis-set security headers (CSP, HSTS, X-*),
+# cookie flags (Secure / HttpOnly / SameSite), cache-control on sensitive responses,
+# info disclosure, the Server header.
+#
+# Posture: ADVISORY by default (`fail-action: false`) — uploads the report, never blocks.
+# Once the caller has triaged its findings into a checked-in ZAP rules file (marking the
+# accepted ones IGNORE), flip `fail-action: true` and add the `DAST baseline` check-run
+# to branch protection — same "advisory then required" path SAST took.
+#
+# Active (attack) scanning is a separate reusable workflow (dast-full.yml), scheduled
+# only, against a throwaway instance.
+
+on:
+  workflow_call:
+    inputs:
+      boot-command:
+        description: >
+          Shell command that starts the target app in the foreground. It is run with
+          `&` (backgrounded) by this workflow; it must bind the URL below.
+        required: true
+        type: string
+      boot-working-directory:
+        description: Working directory for boot-command (relative to the repo root).
+        required: false
+        default: .
+        type: string
+      target-url:
+        description: Base URL the app binds and ZAP scans, e.g. http://127.0.0.1:8080
+        required: true
+        type: string
+      health-path:
+        description: >
+          Path appended to target-url that returns any 2xx/3xx once the app is ready.
+          Polled until it responds or `boot-timeout-seconds` elapses.
+        required: false
+        default: /
+        type: string
+      boot-timeout-seconds:
+        description: How long to wait for health-path to respond before failing.
+        required: false
+        default: 180
+        type: number
+      boot-env:
+        description: >
+          ASPNETCORE_ENVIRONMENT for the boot command. Development is the usual known-good
+          boot for a reference app; a Production-env leg (representative of what ships,
+          no developer exception page) can be added by the caller as a second call.
+        required: false
+        default: Development
+        type: string
+      dotnet-version:
+        description: .NET SDK version for the boot.
+        required: false
+        default: '10.0.x'
+        type: string
+      node-version:
+        description: Node version for node-build.
+        required: false
+        default: '20'
+        type: string
+      node-build:
+        description: >
+          JSON array of directories to `npm ci && npm run build` before the boot
+          (front-end bundles the host packs / serves as static web assets). Empty = skip.
+        required: false
+        default: '[]'
+        type: string
+      rules-file-path:
+        description: >
+          Path in the caller repo to the ZAP rules .tsv (alert-id <TAB> action:
+          IGNORE|WARN|FAIL). Created empty by the caller on first adoption, then filled
+          as findings are triaged. Missing file = every finding is WARN.
+        required: false
+        default: .zap/rules.tsv
+        type: string
+      zap-cmd-options:
+        description: Extra options passed to the ZAP baseline command (e.g. spider scope).
+        required: false
+        default: '-T 5'
+        type: string
+      fail-action:
+        description: >
+          true = the job fails on any WARN/FAIL alert not marked IGNORE in the rules
+          file (blocking). false = advisory: upload the report, always green.
+        required: false
+        default: false
+        type: boolean
+      artifact-name:
+        description: Name for the uploaded ZAP report artifact.
+        required: false
+        default: zap-baseline-report
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dast-baseline:
+    name: DAST baseline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        if: inputs.node-build != '[]'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build front-end bundles
+        if: inputs.node-build != '[]'
+        shell: bash
+        run: |
+          echo '${{ inputs.node-build }}' | jq -r '.[]' | while read -r dir; do
+            echo "::group::npm ci && npm run build ($dir)"
+            (cd "$dir" && npm ci && npm run build)
+            echo "::endgroup::"
+          done
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Boot target and wait for health
+        shell: bash
+        env:
+          ASPNETCORE_ENVIRONMENT: ${{ inputs.boot-env }}
+          BOOT_DIR: ${{ inputs.boot-working-directory }}
+          BOOT_CMD: ${{ inputs.boot-command }}
+          HEALTH_URL: ${{ inputs.target-url }}${{ inputs.health-path }}
+          TIMEOUT: ${{ inputs.boot-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          cd "$BOOT_DIR"
+          echo "boot: $BOOT_CMD"
+          nohup bash -c "$BOOT_CMD" > "$RUNNER_TEMP/boot.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/boot.pid"
+
+          deadline=$(( SECONDS + TIMEOUT ))
+          until curl -fsS -o /dev/null "$HEALTH_URL"; do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/boot.pid")" 2>/dev/null; then
+              echo "::error::target process exited before $HEALTH_URL responded"
+              tail -n 100 "$RUNNER_TEMP/boot.log" || true
+              exit 1
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "::error::$HEALTH_URL did not respond within ${TIMEOUT}s"
+              tail -n 100 "$RUNNER_TEMP/boot.log" || true
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "ready: $HEALTH_URL"
+
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: ${{ inputs.target-url }}
+          rules_file_name: ${{ inputs.rules-file-path }}
+          cmd_options: ${{ inputs.zap-cmd-options }}
+          fail_action: ${{ inputs.fail-action }}
+          allow_issue_writing: false
+          artifact_name: ${{ inputs.artifact-name }}
+
+      - name: Report to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f report_md.md ]; then
+            cat report_md.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No ZAP markdown report produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Target log on failure
+        if: failure()
+        shell: bash
+        run: tail -n 200 "$RUNNER_TEMP/boot.log" || true
