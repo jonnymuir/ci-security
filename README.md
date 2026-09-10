@@ -86,6 +86,52 @@ protection.
        groups: { actions: { patterns: ["*"] } }
    ```
 
+## DAST (dynamic) — `dast-baseline.yml`
+
+`dotnet-security.yml` above is SAST (analyses source). `dast-baseline.yml` runs
+**OWASP ZAP** against a *running* instance of the app — passive rules only, no active
+attacks, non-destructive. Catches what SAST can't: missing/mis-set security headers
+(CSP, HSTS, `X-*`), cookie flags (`Secure` / `HttpOnly` / `SameSite`), cache-control on
+sensitive responses, info disclosure, the `Server` header.
+
+**Posture: advisory** (`fail-action: false`) — uploads a report artifact + writes it to
+the job summary, never blocks. Once the caller has triaged its findings into a checked-in
+ZAP rules file (accepted findings marked `IGNORE`), flip `fail-action: true` and add the
+**`DAST baseline`** check-run to branch protection — the same "advisory then required"
+path SAST took.
+
+Because it boots an app, it lives in its **own** `dast.yml` in the consuming repo, not in
+`security.yml`. Run it on a schedule + `workflow_dispatch` (a PR gate can come later, once
+tuned).
+
+```yaml
+name: DAST
+on:
+  schedule:
+    - cron: '0 4 * * *'   # nightly
+  workflow_dispatch:
+
+jobs:
+  baseline:
+    uses: jonnymuir/ci-security/.github/workflows/dast-baseline.yml@v1
+    permissions:
+      contents: read
+    with:
+      boot-command: dotnet run --project Wayfinder.ReferenceApp --urls http://127.0.0.1:8080
+      target-url: http://127.0.0.1:8080
+      health-path: /account/login
+      node-build: '["Wayfinder.Editor.Client"]'   # bundles the host serves as static assets
+      # rules-file-path: .zap/rules.tsv           # default; create it empty on first adoption
+      # fail-action: false                        # default; flip to true once tuned
+```
+
+Add an empty `.zap/rules.tsv` to the consuming repo on first adoption (one triaged
+finding per line: `<alert-id>\t<IGNORE|WARN|FAIL>\t<url regex>\t# note`). The ZAP
+container mounts the repo root, so the path is repo-root-relative.
+
+`action-baseline` runs ZAP with `--network=host`, so `127.0.0.1:<port>` inside the scan
+reaches the app this workflow booted on the runner.
+
 ## Versioning
 
 Pin `@v1` — a moving major tag. Breaking changes go out as `@v2` (the internal
@@ -93,6 +139,7 @@ composite-action ref is bumped in lockstep at that point).
 
 ## Contents
 
-- `.github/workflows/dotnet-security.yml` — the reusable workflow (`workflow_call`).
+- `.github/workflows/dotnet-security.yml` — reusable SAST + supply-chain (`workflow_call`).
+- `.github/workflows/dast-baseline.yml` — reusable OWASP ZAP baseline scan (`workflow_call`).
 - `.github/actions/nuget-vuln-gate/` — composite action wrapping the vuln-gate script;
   usable on its own (e.g. in a deploy workflow before publishing).
