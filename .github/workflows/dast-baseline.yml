@@ -13,6 +13,11 @@ name: DAST baseline (reusable)
 #
 # Active (attack) scanning is a separate reusable workflow (dast-full.yml), scheduled
 # only, against a throwaway instance.
+#
+# Optional authenticated leg: pass login-command to scan as a signed-in session (cookie
+# replay via a ZAP Replacer rule — see that input's own description). A caller typically
+# wires this as a second job calling this workflow a second time, so the existing
+# unauthenticated leg's coverage of the anonymous login page itself is unaffected.
 
 on:
   workflow_call:
@@ -76,6 +81,22 @@ on:
           as findings are triaged. Missing file = every finding is WARN.
         required: false
         default: .zap/rules.tsv
+        type: string
+      login-command:
+        description: >
+          Optional shell command, run after boot/health-check, that logs in against the
+          booted target and writes the resulting Cookie header value (e.g.
+          "AspNetCore.Cookie=xyz; .AspNetCore.Session=abc") to
+          $RUNNER_TEMP/zap-auth-cookie.txt. When set, every request ZAP's baseline spider
+          makes carries that cookie via a Replacer rule, so the passive scan covers pages
+          reachable only to a signed-in session — including the initial spider seed at
+          target-url. Empty (default) = unauthenticated scan, unchanged from before this
+          input existed. A baseline scan is passive-only (no active attacks), so cookie
+          replay — not a scripted ZAP-driven login — is the right mechanism: no context
+          file or ZAP scripting needed, and it reuses whatever demo/login endpoint the
+          target already has for its own reference-app purposes.
+        required: false
+        default: ''
         type: string
       zap-cmd-options:
         description: Extra options passed to the ZAP baseline command (e.g. spider scope).
@@ -161,12 +182,50 @@ jobs:
           done
           echo "ready: $HEALTH_URL"
 
+      - name: Log in for an authenticated scan
+        if: inputs.login-command != ''
+        shell: bash
+        env:
+          LOGIN_CMD: ${{ inputs.login-command }}
+        run: |
+          set -euo pipefail
+          bash -c "$LOGIN_CMD"
+          if [ ! -s "$RUNNER_TEMP/zap-auth-cookie.txt" ]; then
+            echo "::error::login-command did not write a non-empty $RUNNER_TEMP/zap-auth-cookie.txt"
+            exit 1
+          fi
+          echo "wrote $(wc -c < "$RUNNER_TEMP/zap-auth-cookie.txt") bytes to zap-auth-cookie.txt"
+
+      - name: Build ZAP cmd_options (adds the Cookie replacer when authenticated)
+        id: zap-options
+        shell: bash
+        env:
+          BASE_OPTS: ${{ inputs.zap-cmd-options }}
+        run: |
+          set -euo pipefail
+          opts="$BASE_OPTS"
+          cookie_file="$RUNNER_TEMP/zap-auth-cookie.txt"
+          if [ -f "$cookie_file" ]; then
+            cookie=$(cat "$cookie_file")
+            opts="$opts -config replacer.full_list\(0\).description=auth"
+            opts="$opts -config replacer.full_list\(0\).enabled=true"
+            opts="$opts -config replacer.full_list\(0\).matchtype=REQ_HEADER"
+            opts="$opts -config replacer.full_list\(0\).matchstr=Cookie"
+            opts="$opts -config replacer.full_list\(0\).regex=false"
+            opts="$opts -config replacer.full_list\(0\).replacement=$cookie"
+          fi
+          {
+            echo 'opts<<ZAP_OPTS_EOF'
+            echo "$opts"
+            echo 'ZAP_OPTS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: ${{ inputs.target-url }}
           rules_file_name: ${{ inputs.rules-file-path }}
-          cmd_options: ${{ inputs.zap-cmd-options }}
+          cmd_options: ${{ steps.zap-options.outputs.opts }}
           fail_action: ${{ inputs.fail-action }}
           allow_issue_writing: false
           artifact_name: ${{ inputs.artifact-name }}
