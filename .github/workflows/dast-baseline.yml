@@ -115,6 +115,16 @@ on:
         required: false
         default: zap-baseline-report
         type: string
+      curl-insecure:
+        description: >
+          Pass -k to the boot health-check curl call. For a caller whose local dev boot only
+          serves HTTPS with a self-signed dev-certs cert (e.g. an Aspire stack) — the readiness
+          check would otherwise fail even once the app is genuinely up. Only affects this
+          workflow's own readiness curl; whether ZAP's scan itself tolerates the same
+          self-signed cert is a separate, unverified question for that caller to confirm.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -159,6 +169,7 @@ jobs:
           BOOT_CMD: ${{ inputs.boot-command }}
           HEALTH_URL: ${{ inputs.target-url }}${{ inputs.health-path }}
           TIMEOUT: ${{ inputs.boot-timeout-seconds }}
+          CURL_INSECURE: ${{ inputs.curl-insecure }}
         run: |
           set -euo pipefail
           cd "$BOOT_DIR"
@@ -166,8 +177,13 @@ jobs:
           nohup bash -c "$BOOT_CMD" > "$RUNNER_TEMP/boot.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/boot.pid"
 
+          curl_opts=(-fsS -o /dev/null)
+          if [ "$CURL_INSECURE" = "true" ]; then
+            curl_opts+=(-k)
+          fi
+
           deadline=$(( SECONDS + TIMEOUT ))
-          until curl -fsS -o /dev/null "$HEALTH_URL"; do
+          until curl "${curl_opts[@]}" "$HEALTH_URL"; do
             if ! kill -0 "$(cat "$RUNNER_TEMP/boot.pid")" 2>/dev/null; then
               echo "::error::target process exited before $HEALTH_URL responded"
               tail -n 100 "$RUNNER_TEMP/boot.log" || true
