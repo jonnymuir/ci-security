@@ -207,12 +207,12 @@ jobs:
           cookie_file="$RUNNER_TEMP/zap-auth-cookie.txt"
           if [ -f "$cookie_file" ]; then
             cookie=$(cat "$cookie_file")
-            opts="$opts -config replacer.full_list\(0\).description=auth"
-            opts="$opts -config replacer.full_list\(0\).enabled=true"
-            opts="$opts -config replacer.full_list\(0\).matchtype=REQ_HEADER"
-            opts="$opts -config replacer.full_list\(0\).matchstr=Cookie"
-            opts="$opts -config replacer.full_list\(0\).regex=false"
-            opts="$opts -config replacer.full_list\(0\).replacement=$cookie"
+            # zap-baseline.py's own flag parser owns bare "-config" (it collides with "-c",
+            # its config-FILE flag — confirmed live: passing -config directly made it try to
+            # open a file literally named "onfig", i.e. "-config" minus its own "-c" prefix).
+            # -z is the documented escape hatch: everything inside it is forwarded to the
+            # underlying zap.sh untouched by zap-baseline.py's own parsing.
+            opts="$opts -z \"-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$cookie\""
           fi
           {
             echo 'opts<<ZAP_OPTS_EOF'
