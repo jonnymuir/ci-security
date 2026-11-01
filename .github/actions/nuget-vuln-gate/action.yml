@@ -18,7 +18,8 @@ runs:
   steps:
     - name: Scan for vulnerable NuGet packages
       shell: bash
-      run: |
-        bash "${{ github.action_path }}/check-vulnerable-packages.sh" \
-          "${{ inputs.target }}" \
-          "${{ inputs.allowed-advisories-path }}"
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        TARGET: ${{ inputs.target }}
+        ALLOWED_ADVISORIES_PATH: ${{ inputs.allowed-advisories-path }}
+      run: bash "$ACTION_PATH/check-vulnerable-packages.sh" "$TARGET" "$ALLOWED_ADVISORIES_PATH"
