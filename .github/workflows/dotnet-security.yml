@@ -166,7 +166,7 @@ jobs:
 
       # Internal ref pinned to this repo's major tag; bump both together when cutting v2.
       - name: Gate
-        uses: jonnymuir/ci-security/.github/actions/nuget-vuln-gate@94561c2274456c1461a78592afeba9a0e2174989 # v1
+        uses: jonnymuir/ci-security/.github/actions/nuget-vuln-gate@d70b9489b98698417b4308d5cf5a5e879a5c57e4 # v1
         with:
           target: ${{ inputs.solution }}
           allowed-advisories-path: ${{ inputs.allowed-advisories-path }}
