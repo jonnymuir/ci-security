@@ -1,21 +1,21 @@
 name: DAST baseline (reusable)
 
 # Reusable OWASP ZAP *baseline* scan for the Wayfinder estate. Boots the caller's app,
-# spiders it, runs ZAP's passive rules only — no active attacks, non-destructive. Finds
+# spiders it, runs ZAP's passive rules only, no active attacks, non-destructive. Finds
 # runtime issues SAST can't see: missing/mis-set security headers (CSP, HSTS, X-*),
 # cookie flags (Secure / HttpOnly / SameSite), cache-control on sensitive responses,
 # info disclosure, the Server header.
 #
-# Posture: ADVISORY by default (`fail-action: false`) — uploads the report, never blocks.
+# Posture: ADVISORY by default (`fail-action: false`): uploads the report, never blocks.
 # Once the caller has triaged its findings into a checked-in ZAP rules file (marking the
 # accepted ones IGNORE), flip `fail-action: true` and add the `DAST baseline` check-run
-# to branch protection — same "advisory then required" path SAST took.
+# to branch protection, same "advisory then required" path SAST took.
 #
 # Active (attack) scanning is a separate reusable workflow (dast-full.yml), scheduled
 # only, against a throwaway instance.
 #
 # Optional authenticated leg: pass login-command to scan as a signed-in session (cookie
-# replay via a ZAP Replacer rule — see that input's own description). A caller typically
+# replay via a ZAP Replacer rule, see that input's own description). A caller typically
 # wires this as a second job calling this workflow a second time, so the existing
 # unauthenticated leg's coverage of the anonymous login page itself is unaffected.
 
@@ -89,10 +89,10 @@ on:
           "AspNetCore.Cookie=xyz; .AspNetCore.Session=abc") to
           $RUNNER_TEMP/zap-auth-cookie.txt. When set, every request ZAP's baseline spider
           makes carries that cookie via a Replacer rule, so the passive scan covers pages
-          reachable only to a signed-in session — including the initial spider seed at
+          reachable only to a signed-in session, including the initial spider seed at
           target-url. Empty (default) = unauthenticated scan, unchanged from before this
           input existed. A baseline scan is passive-only (no active attacks), so cookie
-          replay — not a scripted ZAP-driven login — is the right mechanism: no context
+          replay, not a scripted ZAP-driven login, is the right mechanism: no context
           file or ZAP scripting needed, and it reuses whatever demo/login endpoint the
           target already has for its own reference-app purposes.
         required: false
@@ -118,7 +118,7 @@ on:
       curl-insecure:
         description: >
           Pass -k to the boot health-check curl call. For a caller whose local dev boot only
-          serves HTTPS with a self-signed dev-certs cert (e.g. an Aspire stack) — the readiness
+          serves HTTPS with a self-signed dev-certs cert (e.g. an Aspire stack): the readiness
           check would otherwise fail even once the app is genuinely up. Only affects this
           workflow's own readiness curl; whether ZAP's scan itself tolerates the same
           self-signed cert is a separate, unverified question for that caller to confirm.
@@ -149,8 +149,10 @@ jobs:
       - name: Build front-end bundles
         if: inputs.node-build != '[]'
         shell: bash
+        env:
+          NODE_BUILD: ${{ inputs.node-build }}
         run: |
-          echo '${{ inputs.node-build }}' | jq -r '.[]' | while read -r dir; do
+          echo "$NODE_BUILD" | jq -r '.[]' | while read -r dir; do
             echo "::group::npm ci && npm run build ($dir)"
             (cd "$dir" && npm ci && npm run build)
             echo "::endgroup::"
@@ -224,7 +226,7 @@ jobs:
           if [ -f "$cookie_file" ]; then
             cookie=$(cat "$cookie_file")
             # zap-baseline.py's own flag parser owns bare "-config" (it collides with "-c",
-            # its config-FILE flag — confirmed live: passing -config directly made it try to
+            # its config-FILE flag, confirmed live: passing -config directly made it try to
             # open a file literally named "onfig", i.e. "-config" minus its own "-c" prefix).
             # -z is the documented escape hatch: everything inside it is forwarded to the
             # underlying zap.sh untouched by zap-baseline.py's own parsing.

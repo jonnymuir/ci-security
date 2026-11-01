@@ -27,7 +27,7 @@ if [[ -f "$ALLOWLIST" ]]; then
   allowed="$(grep -oE '^(GHSA-[[:alnum:]-]+|CVE-[0-9]{4}-[0-9]+)' "$ALLOWLIST" || true)"
   echo "Allow-list: $ALLOWLIST"
 else
-  echo "Allow-list: $ALLOWLIST (not present — nothing accepted)"
+  echo "Allow-list: $ALLOWLIST (not present: nothing accepted)"
 fi
 
 json="$(dotnet list "$TARGET" package --vulnerable --include-transitive --format json --output-version 1)"
@@ -58,7 +58,7 @@ while IFS=$'\t' read -r severity pkg resolved project url; do
   case "$(tr '[:upper:]' '[:lower:]' <<<"$severity")" in
     critical|high)
       if [[ -n "$allowed" ]] && grep -qxF "$id" <<<"$allowed"; then
-        info+="- ✅ allow-listed — **${pkg}** ${resolved} · ${severity} · ${id} · _${project}_"$'\n'
+        info+="- ✅ allow-listed: **${pkg}** ${resolved} · ${severity} · ${id} · _${project}_"$'\n'
       else
         blocking+="- ❌ **${pkg}** ${resolved} · ${severity} · [${id}](${url}) · _${project}_"$'\n'
         fail=1
@@ -71,16 +71,16 @@ while IFS=$'\t' read -r severity pkg resolved project url; do
 done <<<"$rows"
 
 {
-  echo "## NuGet vulnerability scan — \`${TARGET}\`"
+  echo "## NuGet vulnerability scan: \`${TARGET}\`"
   if [[ -n "$blocking" ]]; then
     echo ""
-    echo "### Blocking — High/Critical, not allow-listed"
+    echo "### Blocking: High/Critical, not allow-listed"
     echo ""
     printf '%s' "$blocking"
   fi
   if [[ -n "$info" ]]; then
     echo ""
-    echo "### Informational — Moderate/Low, or allow-listed"
+    echo "### Informational: Moderate/Low, or allow-listed"
     echo ""
     printf '%s' "$info"
   fi
